@@ -219,22 +219,63 @@
                 });
                 
                 // Group stations by name (for transfer stations)
+                // Only merge if stations are at the same physical location (within 500m)
+                // Special cases: Some stations with same name are different locations (e.g., 양평 on Line 5 vs 경의중앙선)
                 const stationMap = new Map();
+                const separateStations = [
+                    {name: '양평', lines: ['5호선', '경의중앙선']}, // Different 양평 stations
+                ];
+                
                 stations.forEach(station => {
+                    // Check if this station name requires separation by line
+                    const needsSeparation = separateStations.find(s => 
+                        s.name === station.name && s.lines.includes(station.line)
+                    );
+                    
                     if (stationMap.has(station.name)) {
                         const existing = stationMap.get(station.name);
-                        if (!existing.lines.includes(station.line)) {
-                            existing.lines.push(station.line);
+                        
+                        // Calculate distance between stations (in degrees)
+                        const latDiff = Math.abs(existing.lat - station.lat);
+                        const lngDiff = Math.abs(existing.lng - station.lng);
+                        
+                        // Approximate distance in km (1 degree lat ≈ 111km, 1 degree lng ≈ 88km at Seoul latitude)
+                        const distanceKm = Math.sqrt(Math.pow(latDiff * 111, 2) + Math.pow(lngDiff * 88, 2));
+                        
+                        // Only merge if stations are within 0.3km (same physical location/transfer station)
+                        // AND not in the separate stations list
+                        if (distanceKm < 0.3 && !needsSeparation) {
+                            if (!existing.lines.includes(station.line)) {
+                                existing.lines.push(station.line);
+                            }
+                            // Average the coordinates for true transfer stations
+                            existing.x = (existing.x + station.x) / 2;
+                            existing.y = (existing.y + station.y) / 2;
+                            existing.lat = (existing.lat + station.lat) / 2;
+                            existing.lng = (existing.lng + station.lng) / 2;
+                            // Keep multilingual names from first occurrence or update if empty
+                            if (!existing.station_nm_eng) existing.station_nm_eng = station.station_nm_eng;
+                            if (!existing.station_nm_chn) existing.station_nm_chn = station.station_nm_chn;
+                            if (!existing.station_nm_jpn) existing.station_nm_jpn = station.station_nm_jpn;
+                        } else {
+                            // Different physical location OR explicitly separated - create unique ID
+                            const uniqueId = `${station.name}_${station.line}`;
+                            stationMap.set(uniqueId, {...station, id: uniqueId});
+                            if (needsSeparation) {
+                                console.log(`Kept separate by configuration: ${station.name} (${station.line})`);
+                            } else {
+                                console.log(`Found duplicate name at different location: ${station.name} (${station.line}) - distance: ${distanceKm.toFixed(2)}km`);
+                            }
                         }
-                        // Average the coordinates for transfer stations
-                        existing.x = (existing.x + station.x) / 2;
-                        existing.y = (existing.y + station.y) / 2;
-                        // Keep multilingual names from first occurrence or update if empty
-                        if (!existing.station_nm_eng) existing.station_nm_eng = station.station_nm_eng;
-                        if (!existing.station_nm_chn) existing.station_nm_chn = station.station_nm_chn;
-                        if (!existing.station_nm_jpn) existing.station_nm_jpn = station.station_nm_jpn;
                     } else {
-                        stationMap.set(station.name, {...station});
+                        // First occurrence of this station name
+                        if (needsSeparation) {
+                            // Use line-specific ID from the start
+                            const uniqueId = `${station.name}_${station.line}`;
+                            stationMap.set(uniqueId, {...station, id: uniqueId});
+                        } else {
+                            stationMap.set(station.name, {...station});
+                        }
                     }
                 });
                 
@@ -279,22 +320,23 @@
         
         function getTerminalStations() {
             // Define terminal stations for each line with their line numbers to display
+            // Only include actual starting/ending stations of each line
             return {
-                '1호선': {terminals: ['소요산', '연천', '인천', '신창'], number: '1'},
-                '2호선': {terminals: [], number: '2'}, // Circular line
+                '1호선': {terminals: ['연천', '인천', '신창'], number: '1'},
+                '2호선': {terminals: ['신설동', '까치산'], number: '2'}, // Circular line + branches
                 '3호선': {terminals: ['대화', '오금'], number: '3'},
                 '4호선': {terminals: ['당고개', '오이도'], number: '4'},
-                '5호선': {terminals: ['방화', '상일동', '마천', '하남검단산'], number: '5'},
+                '5호선': {terminals: ['방화', '마천', '하남검단산'], number: '5'},
                 '6호선': {terminals: ['응암', '봉화산'], number: '6'},
-                '7호선': {terminals: ['장암', '도봉산', '석남'], number: '7'},
+                '7호선': {terminals: ['장암', '석남'], number: '7'},
                 '8호선': {terminals: ['암사', '모란'], number: '8'},
                 '9호선': {terminals: ['개화', '중앙보훈병원'], number: '9'},
                 '신분당선': {terminals: ['신사', '광교'], number: '신분당'},
-                '경의중앙선': {terminals: ['문산', '임진강', '지평'], number: '경의중앙'},
+                '경의중앙선': {terminals: ['임진강', '지평'], number: '경의중앙'},
                 'GTXA-A': {terminals: ['킨텍스', '동탄'], number: 'GTX-A'},
                 'GTXA-C': {terminals: ['양주', '수원'], number: 'GTX-C'},
                 '수인분당선': {terminals: ['청량리', '인천', '신갈'], number: '수인분당'},
-                '김포골드라인': {terminals: ['양촌'], number: '김포골드'},
+                '김포골드라인': {terminals: ['양촌', '김포공항'], number: '김포골드'},
                 '우이신설선': {terminals: ['우이', '신설동'], number: '우이신설'},
                 '경춘선': {terminals: ['청량리', '춘천'], number: '경춘'},
                 '공항철도': {terminals: ['서울역', '인천국제공항2터미널'], number: '공항'},
@@ -331,6 +373,20 @@
                                "군포", "당정", "의왕", "성균관대", "화서", "수원", "세류", "병점", "서동탄", "세마",
                                "오산대", "오산", "진위", "송탄", "서정리", "지제", "평택지제", "평택", "성환", "직산",
                                "두정", "천안", "봉명", "쌍용", "아산", "탕정", "배방", "온양온천", "신창"]
+                    }
+                },
+                '2호선': {
+                    main: [
+                        "시청", "을지로입구", "을지로3가", "을지로4가", "동대문역사문화공원", "신당", "상왕십리",
+                        "왕십리", "한양대", "뚝섬", "성수", "건대입구", "구의", "강변", "잠실나루",
+                        "잠실", "잠실새내", "종합운동장", "삼성", "선릉", "역삼", "강남", "교대",
+                        "서초", "방배", "사당", "낙성대", "서울대입구", "봉천", "신림", "신대방",
+                        "구로디지털단지", "대림", "신도림", "문래", "영등포구청", "당산", "합정",
+                        "홍대입구", "신촌", "이대", "아현", "충정로", "시청"
+                    ],
+                    branches: {
+                        seongsu: ["성수", "용답", "신답", "용두", "신설동"],
+                        sindorim: ["신도림", "도림천", "양천구청", "신정네거리", "까치산"]
                     }
                 },
                 '5호선': {
@@ -589,11 +645,29 @@
             const stationMap = new Map();
             stations.forEach(station => {
                 stationMap.set(station.id, station);
+                // Also map by name for backward compatibility (but only for non-line-specific IDs)
+                // Don't overwrite existing name mappings if this is a line-specific station
+                if (station.id === station.name && !stationMap.has(station.name)) {
+                    stationMap.set(station.name, station);
+                }
             });
             
             return connections.map(conn => {
                 const lineStations = conn.path.map(stationId => {
-                    const station = stationMap.get(stationId);
+                    // Try direct ID lookup first
+                    let station = stationMap.get(stationId);
+                    
+                    // If not found, try with line-specific ID
+                    if (!station) {
+                        const lineSpecificId = `${stationId}_${conn.line}`;
+                        station = stationMap.get(lineSpecificId);
+                    }
+                    
+                    // If still not found, look for station with matching name and line
+                    if (!station) {
+                        station = stations.find(s => s.name === stationId && s.lines.includes(conn.line));
+                    }
+                    
                     if (!station) {
                         console.warn(`Station not found in map: ${stationId} for line ${conn.line}`);
                         return null;
