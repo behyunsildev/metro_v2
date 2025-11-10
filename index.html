@@ -23,7 +23,12 @@
         }
         
         .station {
-            cursor: help;
+            cursor: pointer;
+        }
+        
+        .station circle,
+        .station path {
+            pointer-events: all;
         }
         
         .station-label {
@@ -37,19 +42,19 @@
 </head>
 <body>
     <!-- Language Switcher -->
-    <div class="absolute top-4 right-4 z-10 bg-white shadow-lg rounded-lg p-4">
-        <h3 class="text-sm font-bold mb-2 text-gray-700">Language / 언어</h3>
-        <div class="flex flex-col gap-2">
-            <button onclick="setLanguage('ko')" class="lang-btn px-4 py-2 rounded-md bg-blue-500 text-white hover:bg-blue-600 transition" data-lang="ko">
+    <div class="absolute top-2 right-2 z-50 bg-white shadow-lg rounded-lg p-2 md:p-4 md:top-4 md:right-4">
+        <h3 class="text-xs md:text-sm font-bold mb-1 md:mb-2 text-gray-700">Language</h3>
+        <div class="flex flex-col gap-1 md:gap-2">
+            <button onclick="window.setLanguage && window.setLanguage('ko')" class="lang-btn px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm rounded-md bg-blue-500 text-white hover:bg-blue-600 transition" data-lang="ko">
                 한국어
             </button>
-            <button onclick="setLanguage('en')" class="lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="en">
+            <button onclick="window.setLanguage && window.setLanguage('en')" class="lang-btn px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="en">
                 English
             </button>
-            <button onclick="setLanguage('cn')" class="lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="cn">
+            <button onclick="window.setLanguage && window.setLanguage('cn')" class="lang-btn px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="cn">
                 中文
             </button>
-            <button onclick="setLanguage('jp')" class="lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="jp">
+            <button onclick="window.setLanguage && window.setLanguage('jp')" class="lang-btn px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="jp">
                 日本語
             </button>
         </div>
@@ -67,9 +72,14 @@
         
         const zoom = d3.zoom()
             .scaleExtent([0.5, 4])
+            .filter((event) => {
+                // Allow zoom/pan, but not when clicking on stations
+                // Return false to prevent zoom behavior on this event
+                return !event.target.closest('.station');
+            })
             .on("zoom", (event) => {
                 g.attr("transform", event.transform);
-                resetFisheyeEffect();
+                // Don't reset fisheye on zoom, it causes flickering
             });
         
         svg.call(zoom);
@@ -102,23 +112,27 @@
         let currentLanguage = 'ko';
         let stations = [];
         let stationsData = [];
+        let connections = [];
+        let lineOrderData = null;
         
-        // Language switcher function
-        function setLanguage(lang) {
+        // Language switcher function - global scope
+        window.setLanguage = function(lang) {
             currentLanguage = lang;
             
             // Update button styles
             document.querySelectorAll('.lang-btn').forEach(btn => {
                 if (btn.dataset.lang === lang) {
-                    btn.className = 'lang-btn px-4 py-2 rounded-md bg-blue-500 text-white hover:bg-blue-600 transition';
+                    btn.className = 'lang-btn px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm rounded-md bg-blue-500 text-white hover:bg-blue-600 transition';
                 } else {
-                    btn.className = 'lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition';
+                    btn.className = 'lang-btn px-2 py-1 md:px-4 md:py-2 text-xs md:text-sm rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition';
                 }
             });
             
             // Redraw stations with new language
-            drawStations(stations);
-        }
+            if (stations.length > 0) {
+                drawStations(stations);
+            }
+        };
         
         // Get station name based on current language
         function getStationName(station) {
@@ -137,12 +151,19 @@
         // Load subway data from JSON
         async function loadSubwayData() {
             try {
-                const response = await fetch('subway_data.json');
-                const data = await response.json();
-                stationsData = data.DATA;
+                // Load both JSON files in parallel
+                const [dataResponse, lineResponse] = await Promise.all([
+                    fetch('subway_data.json'),
+                    fetch('subway_line.json')
+                ]);
                 
-                // Transform data to screen coordinates
-                // Find min/max lat/lng to normalize
+                const data = await dataResponse.json();
+                const lineData = await lineResponse.json();
+                
+                stationsData = data.DATA;
+                lineOrderData = lineData.subway;
+                
+                // Transform data to screen coordinates using proper geographic projection
                 const lats = stationsData.map(s => s.lat);
                 const lngs = stationsData.map(s => s.lng);
                 const minLat = Math.min(...lats);
@@ -150,50 +171,106 @@
                 const minLng = Math.min(...lngs);
                 const maxLng = Math.max(...lngs);
                 
-                // Map size for drawing (leaving margins)
-                const mapWidth = 2000;
-                const mapHeight = 2000;
-                const marginX = 500;
-                const marginY = 500;
+                // Seoul area center approximately
+                const centerLat = (minLat + maxLat) / 2;
+                const centerLng = (minLng + maxLng) / 2;
+                
+                console.log('Lat range:', minLat, '-', maxLat);
+                console.log('Lng range:', minLng, '-', maxLng);
+                
+                // Large canvas for detailed map
+                const mapWidth = 4000;
+                const mapHeight = 4000;
+                
+                // Calculate pixels per degree
+                // At Seoul's latitude (~37.5°), 1 degree longitude ≈ 88.8 km
+                // 1 degree latitude ≈ 111 km everywhere
+                // We want to maintain proper aspect ratio
+                const latRange = maxLat - minLat;
+                const lngRange = maxLng - minLng;
+                
+                // Scale to fit the map, accounting for latitude distortion
+                const lngCorrectionFactor = Math.cos(centerLat * Math.PI / 180);
+                const pixelsPerLatDegree = mapHeight / (latRange * 1.2); // 1.2 for padding
+                const pixelsPerLngDegree = pixelsPerLatDegree * lngCorrectionFactor;
+                
+                console.log('Pixels per lat degree:', pixelsPerLatDegree);
+                console.log('Pixels per lng degree:', pixelsPerLngDegree);
                 
                 // Convert geographic coordinates to screen coordinates
-                stations = stationsData.map(station => ({
-                    id: station.name,
-                    name: station.name,
-                    station_nm_eng: station.station_nm_eng,
-                    station_nm_chn: station.station_nm_chn,
-                    station_nm_jpn: station.station_nm_jpn,
-                    x: marginX + ((station.lng - minLng) / (maxLng - minLng)) * mapWidth,
-                    y: marginY + mapHeight - ((station.lat - minLat) / (maxLat - minLat)) * mapHeight,
-                    lines: [station.line],
-                    line: station.line
-                }));
+                stations = stationsData.map(station => {
+                    const x = (station.lng - minLng) * pixelsPerLngDegree;
+                    const y = (maxLat - station.lat) * pixelsPerLatDegree; // Flip Y axis
+                    
+                    return {
+                        id: station.name,
+                        name: station.name,
+                        station_nm_eng: station.station_nm_eng,
+                        station_nm_chn: station.station_nm_chn,
+                        station_nm_jpn: station.station_nm_jpn,
+                        x: 200 + x, // Add margin
+                        y: 200 + y,
+                        lines: [station.line],
+                        line: station.line,
+                        lat: station.lat,
+                        lng: station.lng,
+                        fr_code: station.fr_code // Keep fr_code for sorting
+                    };
+                });
                 
                 // Group stations by name (for transfer stations)
                 const stationMap = new Map();
                 stations.forEach(station => {
                     if (stationMap.has(station.name)) {
                         const existing = stationMap.get(station.name);
-                        existing.lines.push(station.line);
+                        if (!existing.lines.includes(station.line)) {
+                            existing.lines.push(station.line);
+                        }
                         // Average the coordinates for transfer stations
                         existing.x = (existing.x + station.x) / 2;
                         existing.y = (existing.y + station.y) / 2;
+                        // Keep multilingual names from first occurrence or update if empty
+                        if (!existing.station_nm_eng) existing.station_nm_eng = station.station_nm_eng;
+                        if (!existing.station_nm_chn) existing.station_nm_chn = station.station_nm_chn;
+                        if (!existing.station_nm_jpn) existing.station_nm_jpn = station.station_nm_jpn;
                     } else {
-                        stationMap.set(station.name, station);
+                        stationMap.set(station.name, {...station});
                     }
                 });
                 
                 stations = Array.from(stationMap.values());
                 
-                // Define connections (simplified - major lines only for performance)
-                const connections = generateConnections();
+                // Define connections and store globally
+                connections = generateConnections();
                 
                 const lines = generateLinePaths(connections);
                 drawLines(lines);
                 drawStations(stations);
                 
-                // Set initial zoom to center
-                svg.call(zoom.transform, d3.zoomIdentity.translate(width/2 - 1000, height/2 - 1000).scale(0.4));
+                // Calculate actual bounds of stations
+                const stationXs = stations.map(s => s.x);
+                const stationYs = stations.map(s => s.y);
+                const minX = Math.min(...stationXs);
+                const maxX = Math.max(...stationXs);
+                const minY = Math.min(...stationYs);
+                const maxY = Math.max(...stationYs);
+                
+                console.log('Station bounds:', minX, maxX, minY, maxY);
+                
+                // Set initial zoom to fit all stations
+                const stationWidth = maxX - minX;
+                const stationHeight = maxY - minY;
+                const centerX = (minX + maxX) / 2;
+                const centerY = (minY + maxY) / 2;
+                
+                const scaleX = (width * 0.8) / stationWidth;
+                const scaleY = (height * 0.8) / stationHeight;
+                const initialScale = Math.min(scaleX, scaleY);
+                
+                svg.call(zoom.transform, d3.zoomIdentity
+                    .translate(width/2, height/2)
+                    .scale(initialScale)
+                    .translate(-centerX, -centerY));
                 
             } catch (error) {
                 console.error('Error loading subway data:', error);
@@ -201,20 +278,284 @@
         }
         
         function generateConnections() {
-            // Group stations by line
+            // Special handling for lines with complex routing
+            const specialLineOrders = {
+                '경의중앙선': [
+                    "임진강", "운천", "문산", "파주", "월롱", "금촌", "금릉", "운정", "야당", "탄현",
+                    "일산", "풍산", "백마", "곡산", "대곡", "능곡", "행신", "강매", "한국항공대", "수색",
+                    "디지털미디어시티", "가좌", "홍대입구", "서강대", "공덕", "효창공원앞", "용산",
+                    "이촌", "서빙고", "한남", "옥수", "응봉", "왕십리", "청량리", "회기", "중랑",
+                    "상봉", "망우", "양원", "구리", "도농", "양정", "덕소", "도심", "팔당",
+                    "운길산", "양수", "신원", "국수", "아신", "오빈", "양평", "원덕", "용문", "지평"
+                ],
+                '1호선': {
+                    main: [
+                        "소요산", "동두천", "보산", "동두천중앙", "지행", "덕정", "덕계", "양주", "녹양", "가능",
+                        "의정부", "회룡", "망월사", "도봉산", "도봉", "방학", "창동", "녹천", "월계", "광운대",
+                        "석계", "신이문", "외대앞", "회기", "청량리", "제기동", "신설동", "동묘앞", "동대문",
+                        "종로5가", "종로3가", "종각", "시청", "서울", "남영", "용산", "노량진", "대방",
+                        "신길", "영등포", "신도림", "구로", "구일", "개봉", "오류동", "온수", "역곡",
+                        "소사", "부천", "중동", "송내", "부개", "부평", "백운", "동암", "간석", "주안",
+                        "도화", "제물포", "도원", "동인천", "인천"
+                    ],
+                    branches: {
+                        soyosan: ["소요산", "청산", "전곡", "연천"],
+                        guro: ["구로", "가산디지털단지", "독산", "금천구청", "광명", "석수", "관악", "안양", "명학", "금정",
+                               "군포", "당정", "의왕", "성균관대", "화서", "수원", "세류", "병점", "서동탄", "세마",
+                               "오산대", "오산", "진위", "송탄", "서정리", "지제", "평택지제", "평택", "성환", "직산",
+                               "두정", "천안", "봉명", "쌍용", "아산", "탕정", "배방", "온양온천", "신창"]
+                    }
+                },
+                '5호선': {
+                    main: [
+                        "방화", "개화산", "김포공항", "송정", "마곡", "발산", "우장산", "화곡", "까치산",
+                        "신정", "목동", "오목교", "양평", "영등포구청", "영등포시장", "신길", "여의도",
+                        "여의나루", "마포", "공덕", "애오개", "충정로", "서대문", "광화문", "종로3가",
+                        "을지로4가", "동대문역사문화공원", "청구", "신금호", "행당", "왕십리", "마장",
+                        "답십리", "장한평", "군자", "아차산", "광나루", "천호", "강동", "길동",
+                        "굽은다리", "명일", "고덕", "상일동", "강일", "미사", "하남풍산", "하남시청", "하남검단산"
+                    ],
+                    branches: {
+                        macheon: ["강동", "둔촌동", "올림픽공원", "방이", "오금", "개롱", "거여", "마천"]
+                    }
+                }
+            };
+            
+            // Group stations by line with their fr_code for sorting
             const lineStations = {};
             stationsData.forEach(station => {
                 if (!lineStations[station.line]) {
                     lineStations[station.line] = [];
                 }
-                lineStations[station.line].push(station.name);
+                lineStations[station.line].push({
+                    name: station.name,
+                    fr_code: station.fr_code
+                });
             });
             
-            // Create connections for each line
-            return Object.entries(lineStations).map(([line, stationNames]) => ({
-                line: line,
-                path: stationNames
-            }));
+            // Helper function to parse fr_code for sorting
+            function parseFrCode(code) {
+                if (!code) return { prefix: '', mainNumber: 0, subNumber: 0, branchSuffix: '', hasBranch: false, sortKey: 0 };
+                
+                // Handle different fr_code formats:
+                // 1. Simple: "100", "A01" -> prefix + number
+                // 2. With dash branch: "100-1", "P157-1" -> REAL branches (with dash)
+                // 3. With extra digits: "A042", "A071" -> sub-stations on main line
+                
+                // First check for dash suffix - these are TRUE branches
+                if (code.includes('-')) {
+                    const dashMatch = code.match(/^([A-Z]*)(\d+)(-\d+)$/);
+                    if (dashMatch) {
+                        const mainNum = parseInt(dashMatch[2]) || 0;
+                        return {
+                            prefix: dashMatch[1] || '',
+                            mainNumber: mainNum,
+                            subNumber: 0,
+                            branchSuffix: dashMatch[3],
+                            hasBranch: true,
+                            sortKey: mainNum
+                        };
+                    }
+                }
+                
+                const prefix = code.match(/^([A-Z]*)/)[1] || '';
+                const digitsPart = code.substring(prefix.length);
+                
+                // For codes like A042, A071, A072:
+                // A042 = A + 04 + 2 -> mainNumber=4, subNumber=2, sortKey=4.2
+                // A071 = A + 07 + 1 -> mainNumber=7, subNumber=1, sortKey=7.1
+                // A05 = A + 05 -> mainNumber=5, subNumber=0, sortKey=5.0
+                
+                if (digitsPart.length === 3) {
+                    // 3 digits: first 2 are main, last 1 is sub
+                    const mainNumber = parseInt(digitsPart.substring(0, 2));
+                    const subNumber = parseInt(digitsPart.substring(2, 3));
+                    const sortKey = mainNumber + (subNumber / 10);
+                    
+                    return {
+                        prefix: prefix,
+                        mainNumber: mainNumber,
+                        subNumber: subNumber,
+                        branchSuffix: '',
+                        hasBranch: false,
+                        sortKey: sortKey
+                    };
+                } else if (digitsPart.length === 2 || digitsPart.length === 1) {
+                    // 2 or 1 digits: simple station
+                    const mainNumber = parseInt(digitsPart);
+                    return {
+                        prefix: prefix,
+                        mainNumber: mainNumber,
+                        subNumber: 0,
+                        branchSuffix: '',
+                        hasBranch: false,
+                        sortKey: mainNumber
+                    };
+                } else {
+                    // Fallback for longer codes (like "100", "112")
+                    const mainNumber = parseInt(digitsPart);
+                    return {
+                        prefix: prefix,
+                        mainNumber: mainNumber,
+                        subNumber: 0,
+                        branchSuffix: '',
+                        hasBranch: false,
+                        sortKey: mainNumber
+                    };
+                }
+            }
+            
+            // Sort stations and create connections, handling branches separately
+            const allConnections = [];
+            
+            Object.entries(lineStations).forEach(([line, stationData]) => {
+                // Check if this line has a special predefined order
+                if (specialLineOrders[line]) {
+                    const lineOrder = specialLineOrders[line];
+                    
+                    // Handle simple array (like 경의중앙선)
+                    if (Array.isArray(lineOrder)) {
+                        const existingStations = lineOrder.filter(name => 
+                            stationData.some(s => s.name === name)
+                        );
+                        
+                        allConnections.push({
+                            line: line,
+                            path: existingStations
+                        });
+                        
+                        console.log(`${line}: Using predefined order (${existingStations.length} stations)`);
+                        return;
+                    }
+                    
+                    // Handle complex structure with main + branches (like 1호선)
+                    if (lineOrder.main) {
+                        // Add main line
+                        const mainStations = lineOrder.main.filter(name => 
+                            stationData.some(s => s.name === name)
+                        );
+                        allConnections.push({
+                            line: line,
+                            path: mainStations
+                        });
+                        console.log(`${line} main: ${mainStations.length} stations`);
+                        
+                        // Add branches
+                        if (lineOrder.branches) {
+                            Object.entries(lineOrder.branches).forEach(([branchName, branchPath]) => {
+                                const branchStations = branchPath.filter(name => 
+                                    stationData.some(s => s.name === name)
+                                );
+                                allConnections.push({
+                                    line: line,
+                                    path: branchStations
+                                });
+                                console.log(`${line} ${branchName} branch: ${branchStations.length} stations`);
+                            });
+                        }
+                        
+                        return;
+                    }
+                }
+                
+                // Separate main line from branches
+                const mainLine = [];
+                const branches = {};
+                
+                stationData.forEach(station => {
+                    const parsed = parseFrCode(station.fr_code);
+                    if (parsed.hasBranch) {
+                        // This is a branch station (e.g., 100-1, 100-2)
+                        const branchKey = `${parsed.prefix}${parsed.mainNumber}`;
+                        if (!branches[branchKey]) {
+                            branches[branchKey] = [];
+                        }
+                        branches[branchKey].push(station);
+                    } else {
+                        // This is a main line station (includes sub-stations like A042)
+                        mainLine.push(station);
+                    }
+                });
+                
+                // Sort main line stations using sortKey
+                const sortedMainLine = mainLine.sort((a, b) => {
+                    const codeA = parseFrCode(a.fr_code);
+                    const codeB = parseFrCode(b.fr_code);
+                    
+                    // Compare prefix (empty, A, P, etc.)
+                    if (codeA.prefix !== codeB.prefix) {
+                        return codeA.prefix.localeCompare(codeB.prefix);
+                    }
+                    
+                    // Compare using sortKey which properly handles sub-stations
+                    // A04 (sortKey=4.0) < A042 (sortKey=4.2) < A05 (sortKey=5.0)
+                    // A07 (sortKey=7.0) < A071 (sortKey=7.1) < A072 (sortKey=7.2) < A08 (sortKey=8.0)
+                    return codeA.sortKey - codeB.sortKey;
+                });
+                
+                // Add main line connection
+                if (sortedMainLine.length > 0) {
+                    const pathNames = sortedMainLine.map(s => s.name);
+                    
+                    // Debug logging for Airport Railroad
+                    if (line === '공항철도') {
+                        console.log('공항철도 정렬 전:', stationData.map(s => `${s.name}(${s.fr_code})`).join(', '));
+                        console.log('공항철도 정렬 후:', sortedMainLine.map(s => `${s.name}(${s.fr_code})`).join(' → '));
+                    }
+                    
+                    // Check for consecutive duplicates which would break the line
+                    const uniquePath = [];
+                    for (let i = 0; i < pathNames.length; i++) {
+                        if (i === 0 || pathNames[i] !== pathNames[i-1]) {
+                            uniquePath.push(pathNames[i]);
+                        }
+                    }
+                    
+                    if (uniquePath.length !== pathNames.length) {
+                        console.warn(`Line ${line}: Removed ${pathNames.length - uniquePath.length} consecutive duplicates`);
+                    }
+                    
+                    allConnections.push({
+                        line: line,
+                        path: uniquePath
+                    });
+                }
+                
+                // Add branch connections
+                Object.entries(branches).forEach(([branchKey, branchStations]) => {
+                    // Sort branch stations by their suffix number
+                    const sortedBranch = branchStations.sort((a, b) => {
+                        const codeA = parseFrCode(a.fr_code);
+                        const codeB = parseFrCode(b.fr_code);
+                        return codeA.branchSuffix.localeCompare(codeB.branchSuffix);
+                    });
+                    
+                    // Find the base station (e.g., 100 for the 100-x branch)
+                    const parsed = parseFrCode(sortedBranch[0].fr_code);
+                    const baseStation = sortedMainLine.find(s => {
+                        const baseParsed = parseFrCode(s.fr_code);
+                        return baseParsed.prefix === parsed.prefix && 
+                               baseParsed.mainNumber === parsed.mainNumber;
+                    });
+                    
+                    // Create branch path starting from base station
+                    if (baseStation) {
+                        allConnections.push({
+                            line: line,
+                            path: [baseStation.name, ...sortedBranch.map(s => s.name)]
+                        });
+                    }
+                });
+            });
+            
+            // Log connection counts for verification
+            console.log('Generated connections:', allConnections.length);
+            const airportLine = allConnections.find(c => c.line === '공항철도');
+            if (airportLine) {
+                console.log('Airport Railroad order:', airportLine.path.join(' → '));
+            }
+            
+            return allConnections;
         }
         
         function generateLinePaths(connections) {
@@ -227,10 +568,15 @@
                 const lineStations = conn.path.map(stationId => {
                     const station = stationMap.get(stationId);
                     if (!station) {
+                        console.warn(`Station not found in map: ${stationId} for line ${conn.line}`);
                         return null;
                     }
                     return station;
                 }).filter(station => station !== null);
+                
+                if (lineStations.length < conn.path.length) {
+                    console.warn(`Line ${conn.line}: ${conn.path.length - lineStations.length} stations not found. Expected ${conn.path.length}, got ${lineStations.length}`);
+                }
                 
                 return {
                     line: conn.line,
@@ -284,19 +630,20 @@
             g.selectAll(".line-number").remove();
             
             const stationGroups = g.selectAll(".station")
-                .data(stationsData)
+                .data(stationsData, d => d.id)
                 .enter()
                 .append("g")
                 .attr("class", "station")
                 .attr("transform", d => `translate(${d.x}, ${d.y})`)
+                .style("cursor", "pointer")
                 .on("mouseover", handleStationMouseOver)
                 .on("mouseout", resetFisheyeEffect)
-                .on("wheel", handleStationWheel)
+                .on("wheel", handleStationWheel, {passive: false})
                 .on("click", handleStationClick);
             
             stationGroups.each(function(d) {
                 const station = d3.select(this);
-                if (d.lines.length > 1) {
+                if (d.lines && d.lines.length > 1) {
                     const angleStep = (2 * Math.PI) / d.lines.length;
                     d.lines.forEach((line, i) => {
                         const startAngle = i * angleStep;
@@ -313,7 +660,7 @@
                 } else {
                     station.append("circle")
                         .attr("r", 5)
-                        .attr("fill", lineColors[d.lines[0]] || "#888");
+                        .attr("fill", lineColors[d.lines && d.lines[0]] || "#888");
                 }
                 station.append("text")
                     .attr("class", "station-label")
@@ -352,12 +699,13 @@
             const distortion = isConvex ? distortionValue : -distortionValue * 0.7;
             const transform = fisheye(cx, cy, radiusValue, distortion);
             
+            // Transform station positions
             const transformedStations = stations.map(station => {
                 const result = transform(station.x, station.y);
                 return {...station, x: result.x, y: result.y, scale: result.scale};
             });
             
-            const connections = generateConnections();
+            // Transform line paths using stored connections
             const lines = generateLinePaths(connections);
             const subdivisionCount = Math.max(3, Math.floor(smoothnessValue));
             const transformedLines = lines.map(line => {
@@ -369,6 +717,7 @@
                 return {...line, path: transformedPath};
             });
             
+            // Update lines
             g.selectAll(".subway-line")
                 .data(transformedLines)
                 .join("path")
@@ -387,24 +736,31 @@
                 .attr("stroke-width", 2.5)
                 .attr("fill", "none");
             
+            // Update station positions
             g.selectAll(".station")
-                .data(transformedStations)
-                .join("g")
-                .attr("class", "station")
+                .data(transformedStations, d => d.id)
                 .transition()
                 .duration(800)
                 .ease(d3.easeCubicOut)
                 .attr("transform", d => `translate(${d.x}, ${d.y})`);
+            
+            // Update station labels
+            g.selectAll(".station text")
+                .data(transformedStations, d => d.id)
+                .transition()
+                .duration(800)
+                .ease(d3.easeCubicOut)
+                .text(d => getStationName(d));
         }
         
         function resetFisheyeEffect() {
-            const connections = generateConnections();
             const lines = generateLinePaths(connections);
             drawLines(lines);
             drawStations(stations);
         }
         
         function handleStationMouseOver(event, d) {
+            event.stopPropagation();
             applyFisheyeEffect(d.x, d.y, true);
         }
         
@@ -415,6 +771,8 @@
         }
         
         function handleStationClick(event, d) {
+            console.log('Station clicked:', d.name);
+            event.stopPropagation(); // Prevent event bubbling
             applyFisheyeEffect(d.x, d.y, true);
             setTimeout(() => {
                 resetFisheyeEffect();
