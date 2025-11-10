@@ -277,6 +277,33 @@
             }
         }
         
+        function getTerminalStations() {
+            // Define terminal stations for each line with their line numbers to display
+            return {
+                '1호선': {terminals: ['소요산', '연천', '인천', '신창'], number: '1'},
+                '2호선': {terminals: [], number: '2'}, // Circular line
+                '3호선': {terminals: ['대화', '오금'], number: '3'},
+                '4호선': {terminals: ['당고개', '오이도'], number: '4'},
+                '5호선': {terminals: ['방화', '상일동', '마천', '하남검단산'], number: '5'},
+                '6호선': {terminals: ['응암', '봉화산'], number: '6'},
+                '7호선': {terminals: ['장암', '도봉산', '석남'], number: '7'},
+                '8호선': {terminals: ['암사', '모란'], number: '8'},
+                '9호선': {terminals: ['개화', '중앙보훈병원'], number: '9'},
+                '신분당선': {terminals: ['신사', '광교'], number: '신분당'},
+                '경의중앙선': {terminals: ['문산', '임진강', '지평'], number: '경의중앙'},
+                'GTXA-A': {terminals: ['킨텍스', '동탄'], number: 'GTX-A'},
+                'GTXA-C': {terminals: ['양주', '수원'], number: 'GTX-C'},
+                '수인분당선': {terminals: ['청량리', '인천', '신갈'], number: '수인분당'},
+                '김포골드라인': {terminals: ['양촌'], number: '김포골드'},
+                '우이신설선': {terminals: ['우이', '신설동'], number: '우이신설'},
+                '경춘선': {terminals: ['청량리', '춘천'], number: '경춘'},
+                '공항철도': {terminals: ['서울역', '인천국제공항2터미널'], number: '공항'},
+                '신림선': {terminals: ['대방', '관악산'], number: '신림'},
+                '인천1호선': {terminals: ['계양', '송도달빛축제공원'], number: '인천1'},
+                '인천2호선': {terminals: ['검단오류', '운연'], number: '인천2'}
+            };
+        }
+        
         function generateConnections() {
             // Special handling for lines with complex routing
             const specialLineOrders = {
@@ -667,6 +694,31 @@
                     .attr("dy", 20)
                     .text(getStationName(d));
             });
+            
+            // Add line numbers at terminal stations
+            const terminalConfig = getTerminalStations();
+            Object.entries(terminalConfig).forEach(([lineName, config]) => {
+                config.terminals.forEach(terminalName => {
+                    const station = stationsData.find(s => s.name === terminalName);
+                    if (station) {
+                        // Calculate offset direction based on station position
+                        const offsetX = station.x < 2000 ? -35 : 35;
+                        const offsetY = -10;
+                        
+                        g.append("text")
+                            .attr("class", "line-number")
+                            .attr("x", station.x + offsetX)
+                            .attr("y", station.y + offsetY)
+                            .attr("text-anchor", "middle")
+                            .attr("dominant-baseline", "central")
+                            .style("font-size", "18px")
+                            .style("font-weight", "bold")
+                            .style("fill", lineColors[lineName] || "#888")
+                            .style("pointer-events", "none")
+                            .text(config.number);
+                    }
+                });
+            });
         }
         
         function fisheye(cx, cy, radius, distortion) {
@@ -751,6 +803,43 @@
                 .duration(800)
                 .ease(d3.easeCubicOut)
                 .text(d => getStationName(d));
+            
+            // Update line number positions
+            const terminalConfig = getTerminalStations();
+            g.selectAll(".line-number").each(function() {
+                const textElement = d3.select(this);
+                const lineNumber = textElement.text();
+                
+                // Find which line this belongs to
+                let stationName = null;
+                let lineName = null;
+                Object.entries(terminalConfig).forEach(([line, config]) => {
+                    if (config.number === lineNumber) {
+                        config.terminals.forEach(terminal => {
+                            const origStation = stations.find(s => s.name === terminal);
+                            if (origStation) {
+                                const transformedStation = transformedStations.find(s => s.name === terminal);
+                                if (transformedStation) {
+                                    const offsetX = origStation.x < 2000 ? -35 : 35;
+                                    const offsetY = -10;
+                                    
+                                    // Check if this is the correct terminal by position proximity
+                                    const currentX = parseFloat(textElement.attr("x"));
+                                    const expectedX = origStation.x + offsetX;
+                                    if (Math.abs(currentX - expectedX) < 1) {
+                                        textElement
+                                            .transition()
+                                            .duration(800)
+                                            .ease(d3.easeCubicOut)
+                                            .attr("x", transformedStation.x + offsetX)
+                                            .attr("y", transformedStation.y + offsetY);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                });
+            });
         }
         
         function resetFisheyeEffect() {
