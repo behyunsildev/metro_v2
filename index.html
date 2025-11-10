@@ -1,0 +1,428 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>서울 지하철 노선도 어안렌즈 효과</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
+            background-color: white;
+        }
+        
+        svg {
+            width: 100%;
+            height: 100vh;
+            cursor: move;
+        }
+        
+        .station {
+            cursor: help;
+        }
+        
+        .station-label {
+            font-size: 10px;
+            text-anchor: middle;
+            dominant-baseline: central;
+            pointer-events: none;
+            fill: #606060;
+        }
+    </style>
+</head>
+<body>
+    <!-- Language Switcher -->
+    <div class="absolute top-4 right-4 z-10 bg-white shadow-lg rounded-lg p-4">
+        <h3 class="text-sm font-bold mb-2 text-gray-700">Language / 언어</h3>
+        <div class="flex flex-col gap-2">
+            <button onclick="setLanguage('ko')" class="lang-btn px-4 py-2 rounded-md bg-blue-500 text-white hover:bg-blue-600 transition" data-lang="ko">
+                한국어
+            </button>
+            <button onclick="setLanguage('en')" class="lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="en">
+                English
+            </button>
+            <button onclick="setLanguage('cn')" class="lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="cn">
+                中文
+            </button>
+            <button onclick="setLanguage('jp')" class="lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition" data-lang="jp">
+                日本語
+            </button>
+        </div>
+    </div>
+    
+    <svg id="subway-map"></svg>
+    
+    <script>
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        const svg = d3.select("#subway-map")
+            .attr("width", width)
+            .attr("height", height);
+        
+        const zoom = d3.zoom()
+            .scaleExtent([0.5, 4])
+            .on("zoom", (event) => {
+                g.attr("transform", event.transform);
+                resetFisheyeEffect();
+            });
+        
+        svg.call(zoom);
+        const g = svg.append("g");
+        
+        const lineColors = {
+            "1호선": "#0052A4",
+            "2호선": "#00A84D", 
+            "3호선": "#EF7C1C",
+            "4호선": "#00A5DE",
+            "5호선": "#996CAC",
+            "6호선": "#CD7C2F",
+            "7호선": "#747F00",
+            "8호선": "#E6186C",
+            "9호선": "#BDB092",
+            "신분당선": "#D4003B",
+            "경의중앙선": "#77C4A3",
+            "GTXA-A": "#8B0000",
+            "GTXA-C": "#8B0000",
+            "수인분당선": "#FABE00",
+            "김포골드라인": "#A17917",
+            "우이신설선": "#B7C450",
+            "경춘선": "#32C6A6",
+            "공항철도": "#0090D2",
+            "신림선": "#6789CA",
+            "인천1호선": "#7CA8D5",
+            "인천2호선": "#F5A251"
+        };
+        
+        let currentLanguage = 'ko';
+        let stations = [];
+        let stationsData = [];
+        
+        // Language switcher function
+        function setLanguage(lang) {
+            currentLanguage = lang;
+            
+            // Update button styles
+            document.querySelectorAll('.lang-btn').forEach(btn => {
+                if (btn.dataset.lang === lang) {
+                    btn.className = 'lang-btn px-4 py-2 rounded-md bg-blue-500 text-white hover:bg-blue-600 transition';
+                } else {
+                    btn.className = 'lang-btn px-4 py-2 rounded-md bg-gray-200 text-gray-700 hover:bg-gray-300 transition';
+                }
+            });
+            
+            // Redraw stations with new language
+            drawStations(stations);
+        }
+        
+        // Get station name based on current language
+        function getStationName(station) {
+            switch(currentLanguage) {
+                case 'en':
+                    return station.station_nm_eng || station.name;
+                case 'cn':
+                    return station.station_nm_chn || station.name;
+                case 'jp':
+                    return station.station_nm_jpn || station.name;
+                default:
+                    return station.name;
+            }
+        }
+        
+        // Load subway data from JSON
+        async function loadSubwayData() {
+            try {
+                const response = await fetch('subway_data.json');
+                const data = await response.json();
+                stationsData = data.DATA;
+                
+                // Transform data to screen coordinates
+                // Find min/max lat/lng to normalize
+                const lats = stationsData.map(s => s.lat);
+                const lngs = stationsData.map(s => s.lng);
+                const minLat = Math.min(...lats);
+                const maxLat = Math.max(...lats);
+                const minLng = Math.min(...lngs);
+                const maxLng = Math.max(...lngs);
+                
+                // Map size for drawing (leaving margins)
+                const mapWidth = 2000;
+                const mapHeight = 2000;
+                const marginX = 500;
+                const marginY = 500;
+                
+                // Convert geographic coordinates to screen coordinates
+                stations = stationsData.map(station => ({
+                    id: station.name,
+                    name: station.name,
+                    station_nm_eng: station.station_nm_eng,
+                    station_nm_chn: station.station_nm_chn,
+                    station_nm_jpn: station.station_nm_jpn,
+                    x: marginX + ((station.lng - minLng) / (maxLng - minLng)) * mapWidth,
+                    y: marginY + mapHeight - ((station.lat - minLat) / (maxLat - minLat)) * mapHeight,
+                    lines: [station.line],
+                    line: station.line
+                }));
+                
+                // Group stations by name (for transfer stations)
+                const stationMap = new Map();
+                stations.forEach(station => {
+                    if (stationMap.has(station.name)) {
+                        const existing = stationMap.get(station.name);
+                        existing.lines.push(station.line);
+                        // Average the coordinates for transfer stations
+                        existing.x = (existing.x + station.x) / 2;
+                        existing.y = (existing.y + station.y) / 2;
+                    } else {
+                        stationMap.set(station.name, station);
+                    }
+                });
+                
+                stations = Array.from(stationMap.values());
+                
+                // Define connections (simplified - major lines only for performance)
+                const connections = generateConnections();
+                
+                const lines = generateLinePaths(connections);
+                drawLines(lines);
+                drawStations(stations);
+                
+                // Set initial zoom to center
+                svg.call(zoom.transform, d3.zoomIdentity.translate(width/2 - 1000, height/2 - 1000).scale(0.4));
+                
+            } catch (error) {
+                console.error('Error loading subway data:', error);
+            }
+        }
+        
+        function generateConnections() {
+            // Group stations by line
+            const lineStations = {};
+            stationsData.forEach(station => {
+                if (!lineStations[station.line]) {
+                    lineStations[station.line] = [];
+                }
+                lineStations[station.line].push(station.name);
+            });
+            
+            // Create connections for each line
+            return Object.entries(lineStations).map(([line, stationNames]) => ({
+                line: line,
+                path: stationNames
+            }));
+        }
+        
+        function generateLinePaths(connections) {
+            const stationMap = new Map();
+            stations.forEach(station => {
+                stationMap.set(station.id, station);
+            });
+            
+            return connections.map(conn => {
+                const lineStations = conn.path.map(stationId => {
+                    const station = stationMap.get(stationId);
+                    if (!station) {
+                        return null;
+                    }
+                    return station;
+                }).filter(station => station !== null);
+                
+                return {
+                    line: conn.line,
+                    stations: lineStations,
+                    path: lineStations.map(s => ({x: s.x, y: s.y}))
+                };
+            });
+        }
+        
+        function subdivideLinePath(path, subdivisions = 4) {
+            if (path.length < 2) return path;
+            const result = [];
+            for (let i = 0; i < path.length - 1; i++) {
+                const start = path[i];
+                const end = path[i + 1];
+                result.push(start);
+                for (let j = 1; j < subdivisions; j++) {
+                    const t = j / subdivisions;
+                    result.push({
+                        x: start.x + (end.x - start.x) * t,
+                        y: start.y + (end.y - start.y) * t
+                    });
+                }
+            }
+            result.push(path[path.length - 1]);
+            return result;
+        }
+        
+        function drawLines(linesData) {
+            g.selectAll(".subway-line").remove();
+            linesData.forEach(line => {
+                if (line.path.length < 2) return;
+                
+                const subdividedPath = subdivideLinePath(line.path, 3);
+                const lineGenerator = d3.line()
+                    .x(d => d.x)
+                    .y(d => d.y)
+                    .curve(d3.curveCatmullRom.alpha(0.5));
+                
+                g.append("path")
+                    .attr("class", "subway-line")
+                    .attr("d", lineGenerator(subdividedPath))
+                    .attr("stroke", lineColors[line.line] || "#888")
+                    .attr("stroke-width", 2.5)
+                    .attr("fill", "none");
+            });
+        }
+        
+        function drawStations(stationsData) {
+            g.selectAll(".station").remove();
+            g.selectAll(".line-number").remove();
+            
+            const stationGroups = g.selectAll(".station")
+                .data(stationsData)
+                .enter()
+                .append("g")
+                .attr("class", "station")
+                .attr("transform", d => `translate(${d.x}, ${d.y})`)
+                .on("mouseover", handleStationMouseOver)
+                .on("mouseout", resetFisheyeEffect)
+                .on("wheel", handleStationWheel)
+                .on("click", handleStationClick);
+            
+            stationGroups.each(function(d) {
+                const station = d3.select(this);
+                if (d.lines.length > 1) {
+                    const angleStep = (2 * Math.PI) / d.lines.length;
+                    d.lines.forEach((line, i) => {
+                        const startAngle = i * angleStep;
+                        const endAngle = (i + 1) * angleStep;
+                        const arc = d3.arc()
+                            .innerRadius(0)
+                            .outerRadius(8)
+                            .startAngle(startAngle)
+                            .endAngle(endAngle);
+                        station.append("path")
+                            .attr("d", arc)
+                            .attr("fill", lineColors[line] || "#888");
+                    });
+                } else {
+                    station.append("circle")
+                        .attr("r", 5)
+                        .attr("fill", lineColors[d.lines[0]] || "#888");
+                }
+                station.append("text")
+                    .attr("class", "station-label")
+                    .attr("dy", 20)
+                    .text(getStationName(d));
+            });
+        }
+        
+        function fisheye(cx, cy, radius, distortion) {
+            return function(x, y) {
+                const dx = x - cx;
+                const dy = y - cy;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                let factor = 1;
+                if (distance < radius) {
+                    const normalizedDist = distance / radius;
+                    const fluidFactor = Math.cos(normalizedDist * Math.PI / 2);
+                    factor = 1 + (distortion * fluidFactor);
+                } else {
+                    const falloff = Math.exp(-(distance - radius) / (radius * 0.5));
+                    factor = 1 - 0.2 * falloff * Math.min(1, (distance - radius) / (radius * 1.5));
+                }
+                const angle = Math.atan2(dy, dx);
+                const angleFactor = (distance < radius) ? 
+                    (1 - distance / radius) * 0.05 * distortion * Math.sin(angle * 2) : 0;
+                const newX = cx + dx * factor + dy * angleFactor;
+                const newY = cy + dy * factor - dx * angleFactor;
+                return {x: newX, y: newY, scale: factor};
+            };
+        }
+        
+        function applyFisheyeEffect(cx, cy, isConvex = true) {
+            const distortionValue = 5;
+            const radiusValue = 400;
+            const smoothnessValue = 10;
+            const distortion = isConvex ? distortionValue : -distortionValue * 0.7;
+            const transform = fisheye(cx, cy, radiusValue, distortion);
+            
+            const transformedStations = stations.map(station => {
+                const result = transform(station.x, station.y);
+                return {...station, x: result.x, y: result.y, scale: result.scale};
+            });
+            
+            const connections = generateConnections();
+            const lines = generateLinePaths(connections);
+            const subdivisionCount = Math.max(3, Math.floor(smoothnessValue));
+            const transformedLines = lines.map(line => {
+                const refinedPath = subdivideLinePath(line.path, subdivisionCount);
+                const transformedPath = refinedPath.map(point => {
+                    const result = transform(point.x, point.y);
+                    return {x: result.x, y: result.y};
+                });
+                return {...line, path: transformedPath};
+            });
+            
+            g.selectAll(".subway-line")
+                .data(transformedLines)
+                .join("path")
+                .attr("class", "subway-line")
+                .transition()
+                .duration(800)
+                .ease(d3.easeCubicOut)
+                .attr("d", line => {
+                    const lineGenerator = d3.line()
+                        .x(d => d.x)
+                        .y(d => d.y)
+                        .curve(d3.curveCatmullRom.alpha(0.5));
+                    return lineGenerator(line.path);
+                })
+                .attr("stroke", line => lineColors[line.line] || "#888")
+                .attr("stroke-width", 2.5)
+                .attr("fill", "none");
+            
+            g.selectAll(".station")
+                .data(transformedStations)
+                .join("g")
+                .attr("class", "station")
+                .transition()
+                .duration(800)
+                .ease(d3.easeCubicOut)
+                .attr("transform", d => `translate(${d.x}, ${d.y})`);
+        }
+        
+        function resetFisheyeEffect() {
+            const connections = generateConnections();
+            const lines = generateLinePaths(connections);
+            drawLines(lines);
+            drawStations(stations);
+        }
+        
+        function handleStationMouseOver(event, d) {
+            applyFisheyeEffect(d.x, d.y, true);
+        }
+        
+        function handleStationWheel(event, d) {
+            event.preventDefault();
+            const isZoomIn = event.deltaY < 0;
+            applyFisheyeEffect(d.x, d.y, isZoomIn);
+        }
+        
+        function handleStationClick(event, d) {
+            applyFisheyeEffect(d.x, d.y, true);
+            setTimeout(() => {
+                resetFisheyeEffect();
+            }, 2000);
+        }
+        
+        // Initialize
+        loadSubwayData();
+    </script>
+</body>
+</html>
