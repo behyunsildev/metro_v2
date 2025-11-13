@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>서울 지하철 노선도 어안렌즈 효과</title>
+    <link rel="icon" href="https://static.cargo.site/favicon/c3-favicon.ico" sizes="any">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -37,6 +38,17 @@
             dominant-baseline: central;
             pointer-events: none;
             fill: #606060;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+        
+        .line-number {
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
         }
     </style>
 </head>
@@ -85,6 +97,14 @@
         svg.call(zoom);
         const g = svg.append("g");
         
+        // Add click handler to SVG for resetting fisheye
+        svg.on("click", function(event) {
+            // Only reset if clicking on empty area (not on stations)
+            if (!event.target.closest('.station') && fisheyeActive) {
+                resetFisheyeEffect();
+            }
+        });
+        
         const lineColors = {
             "1호선": "#0052A4",
             "2호선": "#00A84D", 
@@ -109,11 +129,144 @@
             "인천2호선": "#F5A251"
         };
         
+        const lineTranslations = {
+            "1호선": {
+                "ko": "1",
+                "en": "1",
+                "cn": "1",
+                "jp": "1"
+            },
+            "2호선": {
+                "ko": "2",
+                "en": "2",
+                "cn": "2",
+                "jp": "2"
+            },
+            "3호선": {
+                "ko": "3",
+                "en": "3",
+                "cn": "3",
+                "jp": "3"
+            },
+            "4호선": {
+                "ko": "4",
+                "en": "4",
+                "cn": "4",
+                "jp": "4"
+            },
+            "5호선": {
+                "ko": "5",
+                "en": "5",
+                "cn": "5",
+                "jp": "5"
+            },
+            "6호선": {
+                "ko": "6",
+                "en": "6",
+                "cn": "6",
+                "jp": "6"
+            },
+            "7호선": {
+                "ko": "7",
+                "en": "7",
+                "cn": "7",
+                "jp": "7"
+            },
+            "8호선": {
+                "ko": "8",
+                "en": "8",
+                "cn": "8",
+                "jp": "8"
+            },
+            "9호선": {
+                "ko": "9",
+                "en": "9",
+                "cn": "9",
+                "jp": "9"
+            },
+            "신분당선": {
+                "ko": "신분당",
+                "en": "Shinbundang",
+                "cn": "新盆唐",
+                "jp": "シンブンダン"
+            },
+            "경의중앙선": {
+                "ko": "경의중앙",
+                "en": "Gyeongui-Jungang",
+                "cn": "京义-中央",
+                "jp": "キョンウィチュンアン"
+            },
+            "GTXA-A": {
+                "ko": "GTX-A",
+                "en": "GTX-A",
+                "cn": "GTX-A",
+                "jp": "GTX-A"
+            },
+            "GTXA-C": {
+                "ko": "GTX-C",
+                "en": "GTX-C",
+                "cn": "GTX-C",
+                "jp": "GTX-C"
+            },
+            "수인분당선": {
+                "ko": "수인분당",
+                "en": "Suin-Bundang",
+                "cn": "水仁-盆唐",
+                "jp": "スインブンダン"
+            },
+            "김포골드라인": {
+                "ko": "김포골드",
+                "en": "Gimpo Gold",
+                "cn": "金浦黄金",
+                "jp": "キンポゴールド"
+            },
+            "우이신설선": {
+                "ko": "우이신설",
+                "en": "Ui-Sinseol",
+                "cn": "牛耳-新设",
+                "jp": "ウイシンソル"
+            },
+            "경춘선": {
+                "ko": "경춘",
+                "en": "Gyeongchun",
+                "cn": "京春",
+                "jp": "キョンチュン"
+            },
+            "공항철도": {
+                "ko": "공항",
+                "en": "AREX",
+                "cn": "机场",
+                "jp": "AREX"
+            },
+            "신림선": {
+                "ko": "신림",
+                "en": "Sillim",
+                "cn": "新林",
+                "jp": "シルリム"
+            },
+            "인천1호선": {
+                "ko": "인천1",
+                "en": "Incheon 1",
+                "cn": "仁川1",
+                "jp": "インチョン1"
+            },
+            "인천2호선": {
+                "ko": "인천2",
+                "en": "Incheon 2",
+                "cn": "仁川2",
+                "jp": "インチョン2"
+            }
+        };
+        
         let currentLanguage = 'ko';
-        let stations = [];
+        let stations = []; // Original station positions (never modified)
         let stationsData = [];
         let connections = [];
         let lineOrderData = null;
+        let fisheyeActive = false;
+        let currentFisheyeStation = null;
+        let currentTransformedStations = []; // Track current positions
+        let stationPositionMap = new Map(); // Map: station ID -> {origX, origY}
         
         // Language switcher function - global scope
         window.setLanguage = function(lang) {
@@ -128,9 +281,24 @@
                 }
             });
             
-            // Redraw stations with new language
+            // Update labels without changing positions
             if (stations.length > 0) {
-                drawStations(stations);
+                // If fisheye is active, only update labels, not positions
+                if (fisheyeActive) {
+                    // Update station labels
+                    g.selectAll(".station text")
+                        .text(d => getStationName(d));
+                    
+                    // Update line number labels
+                    g.selectAll(".line-number")
+                        .text(function() {
+                            const lineName = d3.select(this).attr("data-line");
+                            return getLineName(lineName);
+                        });
+                } else {
+                    // No fisheye active, safe to redraw everything
+                    drawStations(stations);
+                }
             }
         };
         
@@ -145,6 +313,23 @@
                     return station.station_nm_jpn || station.name;
                 default:
                     return station.name;
+            }
+        }
+        
+        // Get line name based on current language
+        function getLineName(lineName) {
+            const translation = lineTranslations[lineName];
+            if (!translation) return lineName;
+            
+            switch(currentLanguage) {
+                case 'en':
+                    return translation.en;
+                case 'cn':
+                    return translation.cn;
+                case 'jp':
+                    return translation.jp;
+                default:
+                    return translation.ko;
             }
         }
         
@@ -281,6 +466,16 @@
                 
                 stations = Array.from(stationMap.values());
                 
+                // Build position map for original coordinates
+                stationPositionMap.clear();
+                stations.forEach(station => {
+                    stationPositionMap.set(station.id, {
+                        origX: station.x,
+                        origY: station.y,
+                        station: station
+                    });
+                });
+                
                 // Define connections and store globally
                 connections = generateConnections();
                 
@@ -319,30 +514,30 @@
         }
         
         function getTerminalStations() {
-            // Define terminal stations for each line with their line numbers to display
+            // Define terminal stations for each line with their line names (Korean keys)
             // Only include actual starting/ending stations of each line
             return {
-                '1호선': {terminals: ['연천', '인천', '신창'], number: '1'},
-                '2호선': {terminals: ['신설동', '까치산'], number: '2'}, // Circular line + branches
-                '3호선': {terminals: ['대화', '오금'], number: '3'},
-                '4호선': {terminals: ['당고개', '오이도'], number: '4'},
-                '5호선': {terminals: ['방화', '마천', '하남검단산'], number: '5'},
-                '6호선': {terminals: ['응암', '봉화산'], number: '6'},
-                '7호선': {terminals: ['장암', '석남'], number: '7'},
-                '8호선': {terminals: ['암사', '모란'], number: '8'},
-                '9호선': {terminals: ['개화', '중앙보훈병원'], number: '9'},
-                '신분당선': {terminals: ['신사', '광교'], number: '신분당'},
-                '경의중앙선': {terminals: ['임진강', '지평'], number: '경의중앙'},
-                'GTXA-A': {terminals: ['킨텍스', '동탄'], number: 'GTX-A'},
-                'GTXA-C': {terminals: ['양주', '수원'], number: 'GTX-C'},
-                '수인분당선': {terminals: ['청량리', '인천', '신갈'], number: '수인분당'},
-                '김포골드라인': {terminals: ['양촌', '김포공항'], number: '김포골드'},
-                '우이신설선': {terminals: ['우이', '신설동'], number: '우이신설'},
-                '경춘선': {terminals: ['청량리', '춘천'], number: '경춘'},
-                '공항철도': {terminals: ['서울역', '인천국제공항2터미널'], number: '공항'},
-                '신림선': {terminals: ['대방', '관악산'], number: '신림'},
-                '인천1호선': {terminals: ['계양', '송도달빛축제공원'], number: '인천1'},
-                '인천2호선': {terminals: ['검단오류', '운연'], number: '인천2'}
+                '1호선': {terminals: ['연천', '인천', '신창']},
+                '2호선': {terminals: ['신설동', '까치산']}, // Circular line + branches
+                '3호선': {terminals: ['대화', '오금']},
+                '4호선': {terminals: ['진접', '오이도']},
+                '5호선': {terminals: ['방화', '마천', '하남검단산']},
+                '6호선': {terminals: ['응암', '봉화산']},
+                '7호선': {terminals: ['장암', '석남']},
+                '8호선': {terminals: ['암사', '모란']},
+                '9호선': {terminals: ['개화', '중앙보훈병원']},
+                '신분당선': {terminals: ['신사', '광교']},
+                '경의중앙선': {terminals: ['임진강', '지평']},
+                'GTXA-A': {terminals: ['킨텍스', '동탄']},
+                'GTXA-C': {terminals: ['양주', '수원']},
+                '수인분당선': {terminals: ['청량리', '인천', '신갈']},
+                '김포골드라인': {terminals: ['양촌', '김포공항']},
+                '우이신설선': {terminals: ['우이', '신설동']},
+                '경춘선': {terminals: ['청량리', '춘천']},
+                '공항철도': {terminals: ['서울', '인천공항2터미널']},
+                '신림선': {terminals: ['대방', '관악산']},
+                '인천1호선': {terminals: ['계양', '송도달빛축제공원']},
+                '인천2호선': {terminals: ['검단오류', '운연']}
             };
         }
         
@@ -737,9 +932,6 @@
                 .attr("class", "station")
                 .attr("transform", d => `translate(${d.x}, ${d.y})`)
                 .style("cursor", "pointer")
-                .on("mouseover", handleStationMouseOver)
-                .on("mouseout", resetFisheyeEffect)
-                .on("wheel", handleStationWheel, {passive: false})
                 .on("click", handleStationClick);
             
             stationGroups.each(function(d) {
@@ -781,6 +973,8 @@
                         
                         g.append("text")
                             .attr("class", "line-number")
+                            .attr("data-line", lineName) // Store line name for updates
+                            .attr("data-terminal", terminalName) // Store terminal station name
                             .attr("x", station.x + offsetX)
                             .attr("y", station.y + offsetY)
                             .attr("text-anchor", "middle")
@@ -789,7 +983,7 @@
                             .style("font-weight", "bold")
                             .style("fill", lineColors[lineName] || "#888")
                             .style("pointer-events", "none")
-                            .text(config.number);
+                            .text(getLineName(lineName));
                     }
                 });
             });
@@ -825,11 +1019,14 @@
             const distortion = isConvex ? distortionValue : -distortionValue * 0.7;
             const transform = fisheye(cx, cy, radiusValue, distortion);
             
-            // Transform station positions
+            // Transform station positions (always from original positions)
             const transformedStations = stations.map(station => {
                 const result = transform(station.x, station.y);
                 return {...station, x: result.x, y: result.y, scale: result.scale};
             });
+            
+            // Store current transformed positions for next click
+            currentTransformedStations = transformedStations;
             
             // Transform line paths using stored connections
             const lines = generateLinePaths(connections);
@@ -882,64 +1079,120 @@
             const terminalConfig = getTerminalStations();
             g.selectAll(".line-number").each(function() {
                 const textElement = d3.select(this);
-                const lineNumber = textElement.text();
+                const lineName = textElement.attr("data-line");
+                const terminalName = textElement.attr("data-terminal");
                 
-                // Find which line this belongs to
-                let stationName = null;
-                let lineName = null;
-                Object.entries(terminalConfig).forEach(([line, config]) => {
-                    if (config.number === lineNumber) {
-                        config.terminals.forEach(terminal => {
-                            const origStation = stations.find(s => s.name === terminal);
-                            if (origStation) {
-                                const transformedStation = transformedStations.find(s => s.name === terminal);
-                                if (transformedStation) {
-                                    const offsetX = origStation.x < 2000 ? -35 : 35;
-                                    const offsetY = -10;
-                                    
-                                    // Check if this is the correct terminal by position proximity
-                                    const currentX = parseFloat(textElement.attr("x"));
-                                    const expectedX = origStation.x + offsetX;
-                                    if (Math.abs(currentX - expectedX) < 1) {
-                                        textElement
-                                            .transition()
-                                            .duration(800)
-                                            .ease(d3.easeCubicOut)
-                                            .attr("x", transformedStation.x + offsetX)
-                                            .attr("y", transformedStation.y + offsetY);
-                                    }
-                                }
-                            }
-                        });
+                if (lineName && terminalName && terminalConfig[lineName]) {
+                    const origStation = stations.find(s => s.name === terminalName);
+                    if (origStation) {
+                        const transformedStation = transformedStations.find(s => s.name === terminalName);
+                        if (transformedStation) {
+                            const offsetX = origStation.x < 2000 ? -35 : 35;
+                            const offsetY = -10;
+                            
+                            textElement
+                                .transition()
+                                .duration(800)
+                                .ease(d3.easeCubicOut)
+                                .attr("x", transformedStation.x + offsetX)
+                                .attr("y", transformedStation.y + offsetY)
+                                .text(getLineName(lineName));
+                        }
                     }
-                });
+                }
             });
         }
         
         function resetFisheyeEffect() {
+            fisheyeActive = false;
+            currentFisheyeStation = null;
+            currentTransformedStations = []; // Clear transformed state
+            
+            // Animate back to original positions
             const lines = generateLinePaths(connections);
-            drawLines(lines);
-            drawStations(stations);
-        }
-        
-        function handleStationMouseOver(event, d) {
-            event.stopPropagation();
-            applyFisheyeEffect(d.x, d.y, true);
-        }
-        
-        function handleStationWheel(event, d) {
-            event.preventDefault();
-            const isZoomIn = event.deltaY < 0;
-            applyFisheyeEffect(d.x, d.y, isZoomIn);
+            
+            // Update lines with animation
+            g.selectAll(".subway-line")
+                .data(lines)
+                .join("path")
+                .attr("class", "subway-line")
+                .transition()
+                .duration(800)
+                .ease(d3.easeCubicOut)
+                .attr("d", line => {
+                    const subdividedPath = subdivideLinePath(line.path, 3);
+                    const lineGenerator = d3.line()
+                        .x(d => d.x)
+                        .y(d => d.y)
+                        .curve(d3.curveCatmullRom.alpha(0.5));
+                    return lineGenerator(subdividedPath);
+                })
+                .attr("stroke", line => lineColors[line.line] || "#888")
+                .attr("stroke-width", 2.5)
+                .attr("fill", "none");
+            
+            // Update station positions with animation
+            g.selectAll(".station")
+                .data(stations, d => d.id)
+                .transition()
+                .duration(800)
+                .ease(d3.easeCubicOut)
+                .attr("transform", d => `translate(${d.x}, ${d.y})`);
+            
+            // Update station labels
+            g.selectAll(".station text")
+                .data(stations, d => d.id)
+                .transition()
+                .duration(800)
+                .ease(d3.easeCubicOut)
+                .text(d => getStationName(d));
+            
+            // Update line number positions with animation
+            g.selectAll(".line-number").each(function() {
+                const textElement = d3.select(this);
+                const lineName = textElement.attr("data-line");
+                const terminalName = textElement.attr("data-terminal");
+                
+                if (lineName && terminalName) {
+                    const station = stations.find(s => s.name === terminalName);
+                    if (station) {
+                        const offsetX = station.x < 2000 ? -35 : 35;
+                        const offsetY = -10;
+                        
+                        textElement
+                            .transition()
+                            .duration(800)
+                            .ease(d3.easeCubicOut)
+                            .attr("x", station.x + offsetX)
+                            .attr("y", station.y + offsetY)
+                            .text(getLineName(lineName));
+                    }
+                }
+            });
         }
         
         function handleStationClick(event, d) {
-            console.log('Station clicked:', d.name);
-            event.stopPropagation(); // Prevent event bubbling
-            applyFisheyeEffect(d.x, d.y, true);
-            setTimeout(() => {
-                resetFisheyeEffect();
-            }, 2000);
+            event.stopPropagation(); // Prevent event bubbling to SVG
+            
+            // If clicking the same station that's already active, do nothing
+            if (fisheyeActive && currentFisheyeStation && currentFisheyeStation.id === d.id) {
+                return;
+            }
+            
+            // Get original position from the position map
+            const posData = stationPositionMap.get(d.id);
+            if (!posData) {
+                console.error('Station position not found:', d.id);
+                return;
+            }
+            
+            console.log('Station clicked:', d.name, 'at original pos:', posData.origX, posData.origY);
+            
+            // Always apply fisheye centered at ORIGINAL position
+            // This ensures consistent transforms regardless of current state
+            fisheyeActive = true;
+            currentFisheyeStation = posData.station;
+            applyFisheyeEffect(posData.origX, posData.origY, true);
         }
         
         // Initialize
